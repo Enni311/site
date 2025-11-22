@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceRoom P2P</title>
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        :root { --bg: #121212; --card: #1e1e1e; --primary: #5865F2; --danger: #ed4245; --success: #3ba55c; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: white; margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+        
+        /* ЭКРАН ВХОДА */
+        #login { position: fixed; top:0; left:0; width:100%; height:100%; background: var(--bg); z-index: 10; display: flex; align-items: center; justify-content: center; }
+        .login-box { background: var(--card); padding: 30px; border-radius: 15px; width: 320px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        input { width: 100%; padding: 12px; margin: 10px 0; background: #2f3136; border: none; border-radius: 5px; color: white; box-sizing: border-box;}
+        .btn { width: 100%; padding: 12px; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; margin-top: 10px; transition: 0.2s; color: white; }
+        .btn-primary { background: var(--primary); } .btn-primary:hover { background: #4752c4; }
+        
+        /* ИНТЕРФЕЙС */
+        #app { display: none; height: 100%; flex-direction: column; }
+        
+        /* Шапка */
+        header { padding: 15px; background: var(--card); display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; }
+        .my-id-box { background: #2f3136; padding: 5px 10px; border-radius: 4px; font-size: 14px; display: flex; align-items: center; gap: 10px; cursor: pointer; }
+        .my-id-box:hover { background: #40444b; }
+
+        /* Основная зона (Сетка видео) */
+        #streams { flex: 1; padding: 20px; display: flex; flex-wrap: wrap; gap: 15px; align-content: flex-start; justify-content: center; overflow-y: auto; }
+        
+        .user-card { position: relative; width: 300px; height: 220px; background: #000; border-radius: 10px; overflow: hidden; border: 2px solid #333; }
+        .user-card video { width: 100%; height: 100%; object-fit: cover; }
+        .user-label { position: absolute; bottom: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 5px 10px; border-radius: 5px; font-size: 12px; pointer-events: none;}
+        
+        /* Панель управления снизу */
+        .controls { padding: 20px; background: var(--card); display: flex; justify-content: center; gap: 20px; }
+        .ctrl-btn { width: 50px; height: 50px; border-radius: 50%; border: none; cursor: pointer; font-size: 20px; display: flex; align-items: center; justify-content: center; color: white; background: #2f3136; transition: 0.2s;}
+        .ctrl-btn.active { background: white; color: black; }
+        .ctrl-btn.danger { background: var(--danger); }
+
+        /* Добавление участника */
+        .add-peer { position: absolute; top: 80px; right: 20px; background: var(--card); padding: 15px; border-radius: 10px; border: 1px solid #333; width: 250px; display: none;}
+        .add-peer.show { display: block; }
+    </style>
+</head>
+<body>
+
+    <div id="login">
+        <div class="login-box">
+            <h2>🎧 Voice Room</h2>
+            <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=user" id="avatarPreview" style="width:80px; border-radius:50%; background:#333; margin-bottom: 15px;">
+            
+            <input type="text" id="nickInput" placeholder="Твой никнейм" oninput="updateAvatar(this.value)">
+            
+            <div style="text-align: left; font-size: 12px; color: #aaa; margin-top:10px;">Микрофон:</div>
+            <select id="micSelect" style="width:100%; padding: 8px; background: #2f3136; color:white; border:none; border-radius:4px; margin-bottom: 10px;"></select>
+            
+            <div style="background: #222; height: 6px; border-radius: 3px; overflow: hidden; margin-bottom: 10px;">
+                <div id="micBar" style="width: 0%; height: 100%; background: var(--success); transition: 0.1s;"></div>
+            </div>
+            <button class="btn" style="background: #444; font-size:12px;" onclick="runMicTest()">🎤 Тест звука</button>
+
+            <button class="btn btn-primary" onclick="startApp()">Войти</button>
+        </div>
+    </div>
+
+    <div id="app">
+        <header>
+            <div style="font-weight: bold; font-size: 18px;">🔊 Конференция</div>
+            
+            <div class="my-id-box" onclick="copyId()">
+                <i class="fas fa-copy"></i>
+                <span id="myIdDisplay">Loading ID...</span>
+            </div>
+
+            <button class="btn btn-primary" style="width: auto; padding: 8px 15px;" onclick="toggleAddMenu()">
+                <i class="fas fa-user-plus"></i> Добавить друга
+            </button>
+        </header>
+
+        <div class="add-peer" id="addMenu">
+            <h4>Позвонить другу</h4>
+            <p style="font-size: 12px; color: #aaa;">Вставь ID друга, чтобы подключить его к звонку.</p>
+            <input type="text" id="remoteIdInput" placeholder="ID друга">
+            <button class="btn btn-primary" onclick="callPeer()">📞 Позвонить</button>
+        </div>
+
+        <div id="streams">
+            <div class="user-card">
+                <video id="myVideo" muted autoplay playsinline></video>
+                <div class="user-label">Это ты (<span id="myNickLabel"></span>)</div>
+            </div>
+            </div>
+
+        <div class="controls">
+            <button class="ctrl-btn active" id="btnMic" onclick="toggleAudio()"><i class="fas fa-microphone"></i></button>
+            <button class="ctrl-btn active" id="btnCam" onclick="toggleVideo()"><i class="fas fa-video"></i></button>
+            <button class="ctrl-btn" onclick="shareScreen()"><i class="fas fa-desktop"></i></button>
+            <button class="ctrl-btn danger" onclick="location.reload()"><i class="fas fa-phone-slash"></i></button>
+        </div>
+    </div>
+
+    <script>
+        let peer;
+        let myStream;
+        let myNick = "";
+        let peers = {}; // Храним все активные звонки
+
+        // --- 1. НАСТРОЙКИ И ТЕСТ ---
+        const micSelect = document.getElementById('micSelect');
+        
+        async function getDevices() {
+            try {
+                await navigator.mediaDevices.getUserMedia({ audio: true }); 
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                micSelect.innerHTML = '';
+                devices.filter(d => d.kind === 'audioinput').forEach(d => {
+                    const opt = document.createElement('option');
+                    opt.value = d.deviceId;
+                    opt.text = d.label || 'Microphone';
+                    micSelect.appendChild(opt);
+                });
+            } catch (e) { console.log(e); }
+        }
+        getDevices();
+
+        function updateAvatar(val) {
+            document.getElementById('avatarPreview').src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${val}`;
+        }
+
+        function runMicTest() {
+            navigator.mediaDevices.getUserMedia({ audio: { deviceId: micSelect.value } }).then(stream => {
+                const audioContext = new AudioContext();
+                const analyser = audioContext.createAnalyser();
+                const src = audioContext.createMediaStreamSource(stream);
+                src.connect(analyser);
+                const dataArray = new Uint8Array(analyser.frequencyBinCount);
+                
+                const update = () => {
+                    analyser.getByteFrequencyData(dataArray);
+                    const vol = dataArray.reduce((a,b)=>a+b) / dataArray.length;
+                    document.getElementById('micBar').style.width = vol + '%';
+                    requestAnimationFrame(update);
+                };
+                update();
+                setTimeout(() => { stream.getTracks().forEach(t=>t.stop()); document.getElementById('micBar').style.width='0%'; }, 4000);
+            });
+        }
+
+        // --- 2. ЗАПУСК ---
+        function startApp() {
+            myNick = document.getElementById('nickInput').value || "Anon";
+            document.getElementById('myNickLabel').innerText = myNick;
+            document.getElementById('login').style.display = 'none';
+            document.getElementById('app').style.display = 'flex';
+
+            // Получаем поток
+            navigator.mediaDevices.getUserMedia({ 
+                video: true, 
+                audio: { deviceId: micSelect.value } 
+            }).then(stream => {
+                myStream = stream;
+                document.getElementById('myVideo').srcObject = stream;
+                
+                initPeer();
+            });
+        }
+
+        // --- 3. WEB RTC (P2P) ---
+        function initPeer() {
+            peer = new Peer(); // Авто-ID от PeerJS Cloud
+            
+            peer.on('open', id => {
+                document.getElementById('myIdDisplay').innerText = id;
+            });
+
+            // КОГДА НАМ ЗВОНЯТ
+            peer.on('call', call => {
+                call.answer(myStream); // Отвечаем своим потоком
+                handleCall(call);
+            });
+        }
+
+        // МЫ ЗВОНИМ
+        function callPeer() {
+            const id = document.getElementById('remoteIdInput').value;
+            if(!id) return;
+            
+            const call = peer.call(id, myStream);
+            handleCall(call);
+            document.getElementById('addMenu').classList.remove('show');
+            document.getElementById('remoteIdInput').value = '';
+        }
+
+        // ОБРАБОТКА ЗВОНКА (Видео/Аудио)
+        function handleCall(call) {
+            // Создаем контейнер для нового участника
+            const div = document.createElement('div');
+            div.className = 'user-card';
+            const video = document.createElement('video');
+            const label = document.createElement('div');
+            label.className = 'user-label';
+            label.innerText = "Собеседник"; // В простой версии имена не передаем, только AV
+
+            div.appendChild(video);
+            div.appendChild(label);
+            
+            call.on('stream', userStream => {
+                // Если уже есть видео этого человека, не добавляем
+                if(peers[call.peer]) return;
+                
+                video.srcObject = userStream;
+                video.play();
+                document.getElementById('streams').appendChild(div);
+                peers[call.peer] = call;
+            });
+
+            call.on('close', () => {
+                div.remove();
+                delete peers[call.peer];
+            });
+        }
+
+        // --- 4. УПРАВЛЕНИЕ ---
+        function toggleAudio() {
+            const track = myStream.getAudioTracks()[0];
+            track.enabled = !track.enabled;
+            const btn = document.getElementById('btnMic');
+            btn.className = track.enabled ? 'ctrl-btn active' : 'ctrl-btn danger';
+            btn.innerHTML = track.enabled ? '<i class="fas fa-microphone"></i>' : '<i class="fas fa-microphone-slash"></i>';
+        }
+
+        function toggleVideo() {
+            const track = myStream.getVideoTracks()[0];
+            track.enabled = !track.enabled;
+            const btn = document.getElementById('btnCam');
+            btn.className = track.enabled ? 'ctrl-btn active' : 'ctrl-btn danger';
+            btn.innerHTML = track.enabled ? '<i class="fas fa-video"></i>' : '<i class="fas fa-video-slash"></i>';
+        }
+
+        function shareScreen() {
+            navigator.mediaDevices.getDisplayMedia({video:true}).then(screenStream => {
+                const screenTrack = screenStream.getVideoTracks()[0];
+                // Заменяем видео-трек для всех текущих звонков
+                for (let peerId in peers) {
+                    const sender = peers[peerId].peerConnection.getSenders().find(s => s.track.kind === 'video');
+                    sender.replaceTrack(screenTrack);
+                }
+                screenTrack.onended = () => {
+                    const camTrack = myStream.getVideoTracks()[0];
+                    for (let peerId in peers) {
+                        const sender = peers[peerId].peerConnection.getSenders().find(s => s.track.kind === 'video');
+                        sender.replaceTrack(camTrack);
+                    }
+                };
+            });
+        }
+
+        function toggleAddMenu() {
+            document.getElementById('addMenu').classList.toggle('show');
+        }
+
+        function copyId() {
+            const text = document.getElementById('myIdDisplay').innerText;
+            navigator.clipboard.writeText(text);
+            alert("ID скопирован! Отправь его друзьям.");
+        }
+    </script>
+</body>
+</html>
